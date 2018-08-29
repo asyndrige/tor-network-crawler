@@ -105,7 +105,7 @@ func extractLinks(body *io.ReadCloser, quit chan struct{}) <-chan string {
 		doc.Find("a").Each(func(i int, s *goquery.Selection) {
 			if val, ok := s.Attr("href"); ok {
 				if hostName := trimHostName(val); hostName != "" {
-					links <- trimHostName(val)
+					links <- hostName
 				}
 			}
 		})
