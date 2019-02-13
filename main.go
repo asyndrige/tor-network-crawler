@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -40,46 +42,60 @@ func main() {
 	httpProxy := &http.Transport{Dial: dialer.Dial}
 	client := &http.Client{Transport: httpProxy, Timeout: 10 * time.Second}
 
-	res, err := client.Get("http://wiki5kauuihowqi5.onion/")
-	if err != nil {
-		log.Fatal(err)
+	sources := []string{
+		"http://wiki5kauuihowqi5.onion/",
+		"http://gxamjbnu7uknahng.onion/",
+		"http://mijpsrtgf54l7um6.onion/",
+		"http://dirnxxdraygbifgc.onion/",
+		"http://torlinkbgs6aabns.onion/",
 	}
-	defer res.Body.Close()
 
-	quit := make(chan struct{}, 1)
-	defer close(quit)
-	for link := range extractLinks(&res.Body, quit) {
-		res, err := client.Get(link)
-		if err != nil {
-			log.Println(err)
-			continue
+	var (
+		wg       = new(sync.WaitGroup)
+		linksMap = new(sync.Map)
+	)
+	for _, source := range sources {
+		wg.Add(1)
+
+		go func(source string, wg *sync.WaitGroup) {
+			defer wg.Done()
+
+			res, err := client.Get(source)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer res.Body.Close()
+
+			// quit := make(chan struct{}, 1)
+			// defer close(quit)
+			for link := range extractLinks(&res.Body) {
+				res, err := client.Get(link)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				defer res.Body.Close()
+				log.Println(extractTitle(&res.Body), "-", link)
+
+				linksMap.LoadOrStore(link, extractTitle(&res.Body))
+			}
+		}(source, wg)
+
+	}
+
+	wg.Wait()
+
+	var i int
+	linksMap.Range(func(key, value interface{}) bool {
+		fmt.Printf("%#v\n %#v", key, value)
+		i++
+
+		if i > 20 {
+			return false
 		}
-		log.Println(extractTitle(&res.Body), "-", link)
-		res.Body.Close()
-	}
+		return true
+	})
 
-	// conn, err := dialer.Dial("tcp", "3g2upl4pq6kufc4m.onion:80")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer conn.Close()
-	// buf := make([]byte, 0, 4096)
-	// tmp := make([]byte, 0, 256)
-	// for {
-	// n, err := conn.Read(buf)
-	// println("HERE")
-	// if err != nil {
-	// 	if err != io.EOF {
-	// 		fmt.Println("read error:", err)
-	// 	}
-	// 	break
-	// }
-	// fmt.Println("got", n, "bytes.")
-	// buf = append(buf, tmp[:n]...)
-
-	// }
-	// fmt.Println("total size:", len(buf))
-	// fmt.Println(string(buf))
 }
 
 func extractTitle(body *io.ReadCloser) string {
@@ -93,19 +109,20 @@ func extractTitle(body *io.ReadCloser) string {
 	return t
 }
 
-func extractLinks(body *io.ReadCloser, quit chan struct{}) <-chan string {
+func extractLinks(body *io.ReadCloser) <-chan string {
 	links := make(chan string)
 	doc, err := goquery.NewDocumentFromReader(*body)
 	if err != nil {
 		log.Print(err)
 		return nil
 	}
+
 	go func() {
 		defer close(links)
 		doc.Find("a").Each(func(i int, s *goquery.Selection) {
 			if val, ok := s.Attr("href"); ok {
 				if hostName := trimHostName(val); hostName != "" {
-					links <- hostName
+					links <- trimHostName(val)
 				}
 			}
 		})
